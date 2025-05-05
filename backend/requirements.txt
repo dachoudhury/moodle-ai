@@ -1,0 +1,24 @@
+# Fichier des dépendances Python pour le backend
+
+fastapi>=0.100.0
+uvicorn[standard]>=0.20.0 # Serveur ASGI
+python-dotenv>=1.0.0 # Pour charger les variables d'env depuis .env
+pydantic>=2.0.0
+
+# --- Dépendances pour les API externes ---
+# Décommenter celles dont vous aurez besoin
+
+# Pour Groq (LLM)
+groq>=0.9.0
+
+# Pour Mistral AI (OCR et/ou LLM)
+mistralai>=1.7.0 # Assurez-vous d'utiliser une version récente
+
+# Si vous utilisez une bibliothèque OCR locale comme Tesseract:
+# pytesseract>=0.3.10
+# pillow>=9.0.0 # PIL fork, souvent nécessaire pour le traitement d'image
+
+# Si vous faites des requêtes HTTP génériques (alternative aux clients SDK)
+# requests>=2.30.0 
+
+pillow-11.2.1
