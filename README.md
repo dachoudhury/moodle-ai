@@ -72,8 +72,7 @@ The backend server is required for the extension to function.
 ## Usage
 
 1.  Make sure the Python backend server is running.
-2.  Navigate to the web page (e.g., a Moodle quiz or code exercise page) you want to analyze.
-    *   *Note: The selection overlay currently only works on standard HTML pages, not directly on PDF viewer pages.*
+2.  Navigate to any web page (e.g., Moodle, other websites, or even a PDF opened in your browser) you want to analyze.
 3.  Click the MoodleAI Helper extension icon in your Chrome toolbar.
 4.  (Optional) Enter the expected number of output lines if analyzing code.
 5.  Click the **"Start Analysis"** button.
