@@ -19,9 +19,8 @@
 body {
   margin: 0;
   padding: 0; /* Enlever le padding par défaut */
+  width: 300px; /* Set a default width for the popup */
   /* Ajuster la taille du popup */
-  width: 380px; /* Largeur fixe pour le popup */
-  min-height: 150px; /* Hauteur minimale */
 }
 
 /* Styles pour le mode sombre si nécessaire */
@@ -49,8 +48,8 @@ h1 {
 button {
   border-radius: 8px;
   border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
+  padding: 0.2em 0.5em; /* Reduced padding */
+  font-size: 0.9em; /* Reduced font size */
   font-weight: 500;
   font-family: inherit;
   background-color: #1a1a1a;

@@ -1,5 +1,6 @@
 import os
 import json # Ajout de l'import json
+import asyncio # For running sync Gemini in async FastAPI
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,13 +8,16 @@ import base64
 import traceback
 from dotenv import load_dotenv
 # --- Importer les clients nécessaires --- 
-from mistralai import Mistral
-from groq import Groq
+from mistralai import Mistral # Kept for OCR
+# from groq import Groq # To be replaced by Gemini
+import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
+
 # --- Importer les exceptions spécifiques ---
 # Importer `models` pour accéder aux exceptions SDKError et HTTPValidationError
 from mistralai import models as mistral_models 
 
-from groq import APIError as GroqAPIError
+# from groq import APIError as GroqAPIError # To be replaced
 
 # Import pour manipuler les images et conversion
 from io import BytesIO
@@ -33,7 +37,8 @@ load_dotenv()
 
 # --- Récupérer les clés API depuis les variables d'environnement ---
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# GROQ_API_KEY = os.getenv("GROQ_API_KEY") # Commented out
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # --- Initialiser les clients API --- 
 mistral_client = None
@@ -46,15 +51,26 @@ if MISTRAL_API_KEY:
 else:
     print("CRITICAL: Clé API Mistral (MISTRAL_API_KEY) manquante dans .env. OCR Mistral désactivé.")
 
-groq_client = None
-if GROQ_API_KEY:
+# groq_client = None # Commented out
+# if GROQ_API_KEY:
+#     try:
+#         groq_client = Groq(api_key=GROQ_API_KEY)
+#         print("Client Groq initialisé.")
+#     except Exception as e:
+#         print(f"CRITICAL: Erreur initialisation client Groq: {e}")
+# else:
+#     print("CRITICAL: Clé API Groq (GROQ_API_KEY) manquante dans .env. Analyse LLM Groq désactivée.")
+
+gemini_model = None
+if GEMINI_API_KEY:
     try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        print("Client Groq initialisé.")
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel("gemini-2.5-flash-preview-04-17") # Updated model
+        print("Modèle Gemini initialisé (gemini-2.5-flash-preview-04-17).")
     except Exception as e:
-        print(f"CRITICAL: Erreur initialisation client Groq: {e}")
+        print(f"CRITICAL: Erreur initialisation modèle Gemini: {e}")
 else:
-    print("CRITICAL: Clé API Groq (GROQ_API_KEY) manquante dans .env. Analyse LLM Groq désactivée.")
+    print("CRITICAL: Clé API Gemini (GEMINI_API_KEY) manquante dans .env. Analyse LLM Gemini désactivée.")
 
 
 # Modèle Pydantic pour la requête (pas besoin des clés ici, elles sont dans .env)
@@ -75,6 +91,7 @@ class QAPair(BaseModel):
     question: str
     answer: str = "" 
     question_type: str = "course" # "code" ou "course"
+    language_detected: Optional[str] = None # To store detected language for code
     
 class AnalyzeResponse(BaseModel):
     results: list[QAPair]
@@ -106,14 +123,15 @@ async def analyze_screenshot(request: Request):
     # Vérifier si les clients sont initialisés
     if not mistral_client:
         raise HTTPException(status_code=503, detail="Service OCR (Mistral) non disponible côté backend.")
-    if not groq_client:
-        raise HTTPException(status_code=503, detail="Service LLM (Groq) non disponible côté backend.")
+    # if not groq_client: # Commented out
+    #     raise HTTPException(status_code=503, detail="Service LLM (Groq) non disponible côté backend.")
+    if not gemini_model:
+        raise HTTPException(status_code=503, detail="Service LLM (Gemini) non disponible côté backend.")
     
-    # Parse le body JSON manuellement pour plus de flexibilité    
     try:
         body = await request.json()
         image_data = body.get("imageData", "")
-        crop_area = body.get("cropArea", None)
+        crop_area_data = body.get("cropArea", None) # Renamed to avoid conflict
         expected_lines = body.get("expectedOutputLines", None)
         print(f"Nombre de lignes d'output attendu (depuis requête): {expected_lines}")
         
@@ -125,10 +143,10 @@ async def analyze_screenshot(request: Request):
             raise HTTPException(status_code=400, detail=f"Format image invalide: {e}")
 
         image = Image.open(BytesIO(image_data_bytes))
-        if crop_area:
+        if crop_area_data: # Use renamed variable
             try:
-                dpr = crop_area.get("dpr", 1.0)
-                x, y, w, h = int(crop_area["x"]*dpr), int(crop_area["y"]*dpr), int(crop_area["width"]*dpr), int(crop_area["height"]*dpr)
+                dpr = crop_area_data.get("dpr", 1.0)
+                x, y, w, h = int(crop_area_data["x"]*dpr), int(crop_area_data["y"]*dpr), int(crop_area_data["width"]*dpr), int(crop_area_data["height"]*dpr)
                 if w <= 0 or h <= 0: raise ValueError("Dimensions invalides")
                 image = image.crop((x, y, x + w, y + h))
                 print(f"Image recadrée: {image.size}px")
@@ -238,183 +256,219 @@ async def perform_ocr(pdf_bytes: bytes) -> str:
 
 async def analyze_ocr_content(ocr_text: str, expected_lines: Optional[int] = None) -> list[QAPair]:
     """
-    Analyse le contenu OCR. Si expected_lines est fourni, traite comme du code JS 
-    avec boucle de correction. Sinon, traite comme du contenu de cours.
+    Analyse le contenu OCR.
+    Si expected_lines est fourni:
+        1. Détecte le langage (JS, HTML, CSS, PHP) et extrait le code.
+        2. Pour JS/PHP: Tente d'exécuter avec une boucle de correction (1 correction).
+        3. Pour HTML/CSS: Formatte et décrit le code.
+        4. Formatte la réponse finale.
+    Sinon (pas d'expected_lines): traite comme du contenu de cours.
     """
-    if not groq_client: raise GroqAPIError("Client Groq non configuré.")
+    # if not groq_client: raise GroqAPIError("Client Groq non configuré.") # Commented out
+    if not gemini_model: raise HTTPException(status_code=503, detail="Client Gemini non configuré pour analyze_ocr_content.")
     if not ocr_text or ocr_text.isspace(): return []
 
-    final_results = []
     qa_pair = QAPair(question="") # Initialisation
+    final_answer = "[Traitement de la requête a échoué]" # Default error
 
-    # --- Branchement Principal: Code vs Cours --- 
     if expected_lines is not None: 
-        # --- Traitement comme CODE --- 
-        qa_pair.question = "Analyse du Code Javascript" # Question générique en français
         qa_pair.question_type = "code" 
         print(f"--- Traitement comme CODE (expected_lines = {expected_lines}) ---")
         
-        current_code = None
-        exec_result = None
-        final_answer = "[Traitement de la question de code a échoué]"; # Message d'erreur en français
-        max_attempts = 2 
-        previous_code = None
-        previous_error_output = None
-        previous_error_status = None
-
-        for attempt in range(max_attempts):
-            print(f"--- Tentative Code {attempt + 1}/{max_attempts} ---")
-            code_to_execute = None
-
-            if attempt == 0:
-                # --- LLM 2: Réécriture Code Initial --- 
-                print(f"  -> LLM Étape 2: Réécriture Code JS initial...")
-                # Traduction du prompt 2
-                prompt2_rewrite_code = f"""
-Contexte: Le texte suivant a été extrait via OCR :
-"{ocr_text}"
-
-Tâche: Extrayez le fragment de code Javascript principal du texte ci-dessus.
-Réécrivez le code proprement, en corrigeant les erreurs OCR potentielles ou les problèmes de syntaxe mineurs.
-Retournez UNIQUEMENT le code Javascript brut, sans explications ni démarques Markdown.
-Si aucun code Javascript n'est trouvé, répondez : NO_CODE_FOUND
-Code Réécrit :
+        # --- LLM Call 1: Détection de Langage et Extraction de Code ---
+        print("  -> LLM Étape 1: Détection Langage & Extraction Code...")
+        # Prompt pour la détection et extraction
+        # Traduction du prompt pour détection/extraction
+        prompt_detect_extract = f'''
+Analysez le texte OCR suivant :
 """
-                try:
-                    raw_code_from_llm = await call_groq_llm(prompt2_rewrite_code, is_json_output_expected=False)
-                    cleaned_code = clean_llm_code_output(raw_code_from_llm)
-                    if cleaned_code and cleaned_code != "NO_CODE_FOUND" and len(cleaned_code) > 5:
-                        code_to_execute = cleaned_code
-                        print(f"    -> Code JS réécrit et nettoyé (Tentative 1):")
-                        print(f"    ```javascript")
-                        print(code_to_execute)
-                        print(f"    ```")
-                    else:
-                        print(f"    -> LLM 2 n'a pas trouvé/réécrit de code JS pertinent.")
-                        final_answer = "[Impossible d'extraire le code JS du texte OCR]"; # Message en français
-                        break 
-                except Exception as e:
-                    print(f"    -> Erreur LLM Étape 2 (Réécriture): {e}")
-                    final_answer = f"[Erreur LLM lors de l'extraction du code: {e}]"; # Message en français
-                    break
-            else: # attempt > 0: Correction
-                # --- LLM 4: Correction Code --- 
-                print(f"  -> LLM Étape 4: Correction Code JS suite à erreur...")
-                if previous_code and previous_error_output:
-                    print(f"    -> Erreur Précédente (Status: {previous_error_status}): {previous_error_output}")
-                    # Traduction du prompt 4
-                    prompt4_fix_code = f"""
-Le code Javascript suivant a échoué lors de son exécution.
-Code Échoué :
-```javascript
-{previous_code}
-```
-Statut d'Erreur d'Exécution : {previous_error_status}
-Message d'Erreur : {previous_error_output}
-
-Réécrivez le code pour corriger l'erreur spécifique rapportée dans le Message d'Erreur.
-Retournez UNIQUEMENT le code Javascript brut et corrigé, sans explications.
-Code Corrigé :
+{ocr_text}
 """
-                    try:
-                        raw_code_from_llm = await call_groq_llm(prompt4_fix_code, is_json_output_expected=False)
-                        cleaned_code = clean_llm_code_output(raw_code_from_llm)
-                        if cleaned_code and len(cleaned_code) > 5 and cleaned_code != "NO_CODE_FOUND":
-                            code_to_execute = cleaned_code
-                            print(f"    -> Code JS corrigé et nettoyé (Tentative 2):")
-                            print(f"    ```javascript")
-                            print(code_to_execute)
-                            print(f"    ```")
-                        else:
-                            print(f"    -> LLM 4 n'a pas pu corriger le code.")
-                            final_answer = "[LLM n'a pas pu corriger le code après erreur d'exécution]"; # Message en français
-                            break 
-                    except Exception as e:
-                        print(f"    -> Erreur LLM Étape 4 (Correction): {e}")
-                        final_answer = f"[Erreur LLM lors de la correction du code: {e}]"; # Message en français
-                        break 
-                else:
-                    print("    -> Erreur interne: Manque d'infos pour correction.")
-                    break
+Tâche :
+1. Identifiez le langage de programmation principal (javascript, php, html, css, ou 'other' si non reconnu ou mixte).
+2. Extrayez le bloc de code principal correspondant. Le code extrait doit être une chaîne JSON valide, ce qui signifie que les backslashes (\\\\) et les guillemets (\\") doivent être échappés (\\\\\\\\ et \\\\\\") et les nouvelles lignes doivent être représentées par \\\\n.
+3. Répondez UNIQUEMENT avec un objet JSON contenant les clés "language" et "code".
+   Exemple de réponse pour du code sur une seule ligne : {{"language": "javascript", "code": "console.log(\\'Hello World!\\');"}}
+   Exemple de réponse pour du code sur plusieurs lignes : {{"language": "php", "code": "$name = \\\\"Monde\\\\";\\\\necho \\\\"Bonjour $name!\\\\";"}}
+   Si aucun code n'est trouvé ou si le langage n'est pas clair, utilisez "language": "none", "code": "".
 
-            # --- Exécution du code --- 
-            if code_to_execute:
-                print(f"  -> Exécution Tentative {attempt + 1} du Code JS NETTOYÉ...")
-                exec_result = run_js_code(code_to_execute)
+JSON Réponse :
+'''
+        detected_language = "none"
+        extracted_code = ""
+        try:
+            # response_json_str = await call_groq_llm(prompt_detect_extract, is_json_output_expected=True) # Commented out
+            response_json_str = await call_gemini_llm(prompt_detect_extract, is_json_output_expected=True)
+            response_data = json.loads(response_json_str)
+            detected_language = response_data.get("language", "none").lower()
+            extracted_code = response_data.get("code", "")
+            qa_pair.language_detected = detected_language
+            print(f"    -> Langage Détecté: {detected_language}, Code Extrait (longueur): {len(extracted_code)}")
+        except Exception as e:
+            print(f"    -> Erreur LLM Étape 1 (Détection/Extraction): {e}")
+            final_answer = f"[Erreur LLM lors de la détection du langage: {e}]"
+            qa_pair.answer = final_answer
+            return [qa_pair]
+
+        if detected_language == "none" or not extracted_code.strip():
+            final_answer = "[Aucun code pertinent trouvé dans le texte OCR]"
+            qa_pair.question = "Analyse de Code (aucun code trouvé)"
+            qa_pair.answer = final_answer
+            return [qa_pair]
+
+        qa_pair.question = f"Analyse de code {detected_language.upper()}"
+        current_code_to_process = clean_llm_code_output(extracted_code) # Nettoyer le code extrait
+
+        # --- Traitement Spécifique par Langage ---
+        max_attempts = 2 # 1 exécution initiale + 1 correction
+        
+        if detected_language in ["javascript", "php"]:
+            exec_function = run_js_code if detected_language == "javascript" else run_php_code
+            lang_name_for_prompt = "JavaScript" if detected_language == "javascript" else "PHP"
+
+            for attempt in range(max_attempts):
+                print(f"  -> Tentative Exécution {lang_name_for_prompt} {attempt + 1}/{max_attempts}...")
+                exec_result = exec_function(current_code_to_process)
                 print(f"    -> Résultat Exécution: {exec_result['status']}")
 
                 if exec_result['status'] == 'executed':
-                    # --- LLM 3: Réponse Finale (Code OK) --- 
-                    print(f"  -> LLM Étape 3: Réponse Finale (Code OK)...")
-                    # Traduction du prompt 3 (code)
-                    prompt3_answer_code = f"""
-Contexte: Le fragment de code Javascript suivant a été exécuté.
-Fragment de Code (Nettoyé & Exécuté) :
-```javascript
+                    print(f"  -> LLM Étape Finale ({lang_name_for_prompt} OK): Formatage Réponse...")
+                    # Prompt pour formater la réponse finale (code OK)
+                    prompt_final_answer_code = f"""
+Contexte: Le code {lang_name_for_prompt} suivant a été exécuté :
+Code Exécuté :
+\`\`\`{detected_language}
 {exec_result['formatted_code']}
-```
+\`\`\`
 Sortie d'Exécution :
 {exec_result['output'] if exec_result['output'] else 'Aucune sortie'}
-Indice Utilisateur (Nb Max Lignes Attendues) : {expected_lines if expected_lines is not None else 'Non spécifié'}
+Nombre de lignes attendues par l'utilisateur : {expected_lines}
 
-Tâche: Analysez la Sortie d'Exécution. Fournissez UNIQUEMENT la sortie elle-même, formatée de manière appropriée en fonction du contenu réel de la sortie et de l'indice utilisateur sur les lignes attendues (si la sortie a moins de lignes ou des lignes vides, respectez cela). N'expliquez pas le code, l'exécution, ni n'ajoutez d'étiquettes comme "Sortie :". S'il n'y a pas eu de sortie, répondez par "(Aucune sortie produite)".
+Tâche: Fournissez UNIQUEMENT la sortie d'exécution, formatée pour correspondre au nombre de lignes attendues.
+N'ajoutez aucune explication, seulement la sortie. Si vide, répondez "(Aucune sortie produite)".
 Réponse :
 """
                     try:
-                        final_answer_text = await call_groq_llm(prompt3_answer_code, is_json_output_expected=False)
+                        # final_answer_text = await call_groq_llm(prompt_final_answer_code, is_json_output_expected=False) # Commented out
+                        final_answer_text = await call_gemini_llm(prompt_final_answer_code, is_json_output_expected=False)
                         final_answer = final_answer_text.strip()
-                        print(f"    -> Réponse LLM 3 (Code OK) obtenue.")
-                        break # Succès!
+                        print(f"    -> Réponse LLM (Code OK) obtenue.")
+                        break # Succès
                     except Exception as e:
-                        print(f"    -> Erreur LLM Étape 3 (Réponse Code OK): {e}")
-                        final_answer = f"[Erreur LLM pour la réponse finale: {e}]"; # Message en français
+                        print(f"    -> Erreur LLM Étape Finale (Formatage): {e}")
+                        final_answer = f"[Erreur LLM pour la réponse finale du code: {e}]"
                         break 
                 else: # Erreur d'exécution
-                    print(f"    -> Exécution échouée (Tentative {attempt + 1}). Préparation pour correction.")
-                    previous_code = exec_result['formatted_code']
-                    previous_error_output = exec_result['output']
-                    previous_error_status = exec_result['status']
-                    if attempt == max_attempts - 1:
-                        final_answer = f"[Échec d'exécution du code JS même après correction (Status: {exec_result['status']})]"; # Message en français
-                    else:
-                         final_answer = f"[Échec d'exécution du code JS (Status: {exec_result['status']})]"; # Message en français
-            else:
-                print("  -> Erreur: Pas de code valide à exécuter.")
-                break # Sortir boucle tentative si pas de code
+                    if attempt < max_attempts - 1:
+                        print(f"  -> LLM Étape Correction ({lang_name_for_prompt} Échoué): Tentative de Correction...")
+                        # Prompt pour correction de code
+                        prompt_fix_code = f"""
+Le code {lang_name_for_prompt} suivant a produit une erreur :
+Code Échoué :
+\`\`\`{detected_language}
+{exec_result['formatted_code']}
+\`\`\`
+Erreur d'Exécution ({exec_result['status']}) :
+{exec_result['output']}
 
-        # Fin boucle de tentatives pour le code
+Tâche: Corrigez le code pour résoudre l'erreur. Retournez UNIQUEMENT le code {lang_name_for_prompt} corrigé et brut.
+Code Corrigé :
+"""
+                        try:
+                            # corrected_code_raw = await call_groq_llm(prompt_fix_code, is_json_output_expected=False) # Commented out
+                            corrected_code_raw = await call_gemini_llm(prompt_fix_code, is_json_output_expected=False)
+                            current_code_to_process = clean_llm_code_output(corrected_code_raw)
+                            if not current_code_to_process:
+                                print("    -> LLM n'a pas retourné de code corrigé.")
+                                final_answer = f"[Échec de la correction du code {lang_name_for_prompt} par LLM]"
+                                break # Sortir de la boucle de tentative
+                            print(f"    -> Code {lang_name_for_prompt} corrigé par LLM, nouvelle tentative...")
+                        except Exception as e:
+                            print(f"    -> Erreur LLM Étape Correction: {e}")
+                            final_answer = f"[Erreur LLM lors de la tentative de correction du code: {e}]"
+                            break # Sortir de la boucle de tentative
+                    else:
+                        final_answer = f"[Échec d'exécution du code {lang_name_for_prompt} après {max_attempts} tentatives. Erreur: {exec_result['output']}]"
+                        break # Fin des tentatives
+
+        elif detected_language in ["html", "css"]:
+            lang_name_for_prompt = "HTML" if detected_language == "html" else "CSS"
+            print(f"  -> LLM Étape Finale ({lang_name_for_prompt}): Formatage et Description...")
+            # Prompt pour HTML/CSS
+            prompt_format_describe_static = f"""
+Le code {lang_name_for_prompt} suivant a été extrait :
+\`\`\`{detected_language}
+{current_code_to_process}
+\`\`\`
+Tâche:
+1. Formattez ce code {lang_name_for_prompt} proprement.
+2. Fournissez une brève description de ce que fait ce code ou de ce qu'il représente.
+Répondez avec le code formaté, suivi de "---DESCRIPTION---", puis la description.
+Réponse :
+"""
+            try:
+                # response_text = await call_groq_llm(prompt_format_describe_static, is_json_output_expected=False) # Commented out
+                response_text = await call_gemini_llm(prompt_format_describe_static, is_json_output_expected=False)
+                parts = response_text.split("---DESCRIPTION---", 1)
+                formatted_code = parts[0].strip()
+                description = parts[1].strip() if len(parts) > 1 else "Aucune description fournie."
+                final_answer = f"Code {lang_name_for_prompt} Formaté:\n{formatted_code}\n\nDescription:\n{description}"
+                print(f"    -> Réponse LLM ({lang_name_for_prompt}) obtenue.")
+            except Exception as e:
+                print(f"    -> Erreur LLM ({lang_name_for_prompt}): {e}")
+                final_answer = f"[Erreur LLM lors du formatage/description du code {lang_name_for_prompt}: {e}]"
+        
+        else: # 'other' ou non géré
+            print(f"  -> Langage '{detected_language}' non supporté pour exécution/traitement spécifique.")
+            final_answer = f"[Langage '{detected_language}' détecté mais non supporté pour un traitement avancé. Code extrait:\n{current_code_to_process[:1000]}]"
+
         qa_pair.answer = final_answer
-        final_results.append(qa_pair)
 
     else: 
         # --- Traitement comme COURS --- 
-        qa_pair.question = "Analyse du Contenu du Cours" # Question générique en français
+        qa_pair.question = "Analyse du Contenu du Cours"
         qa_pair.question_type = "course"
         print("--- Traitement comme COURS (expected_lines non fourni) ---")
         
-        # Traduction du prompt cours
         prompt_answer_course = f"""
 Analysez le texte suivant extrait d'une capture d'écran de matériel de cours.
-Résumez les points clés ou répondez de manière concise à toute question implicite trouvée dans le texte.
+Votre objectif principal est d'identifier une question (explicite ou implicite) et de fournir UNIQUEMENT sa réponse la plus directe et unique.
+
+Si vous identifiez une seule réponse claire et certaine :
+Fournissez cette unique réponse, sans aucune explication supplémentaire.
+
+Si vous hésitez entre plusieurs réponses distinctes OU si plusieurs réponses semblent également valides :
+Listez chaque proposition de réponse. Pour chaque proposition, expliquez brièvement (en 1-2 phrases) pourquoi elle pourrait être correcte.
+Formattez comme suit :
+PROPOSITION 1: [Texte de la réponse 1]
+JUSTIFICATION 1: [Explication pour la réponse 1]
+
+PROPOSITION 2: [Texte de la réponse 2]
+JUSTIFICATION 2: [Explication pour la réponse 2]
+(et ainsi de suite pour d'autres propositions si nécessaire)
+
+Si le texte ne contient pas de question claire ou si aucune réponse pertinente ne peut être extraite :
+Répondez par : '(Pas de question directe ou réponse trouvée)'
+
+Ne reformulez pas la question. Ne donnez pas de résumé général du texte.
 
 Contenu du Texte :
 ---
 {ocr_text}
 ---
 
-Analyse/Résumé :
+Réponse(s) et Justification(s) (si applicable) :
 """
         try:
-            answer_text = await call_groq_llm(prompt_answer_course, is_json_output_expected=False)
+            # answer_text = await call_groq_llm(prompt_answer_course, is_json_output_expected=False) # Commented out
+            answer_text = await call_gemini_llm(prompt_answer_course, is_json_output_expected=False)
             qa_pair.answer = answer_text.strip()
             print(f"  -> Réponse LLM (Cours) obtenue.")
         except Exception as e:
             print(f"Erreur LLM Réponse Cours: {e}")
-            qa_pair.answer = f"[Erreur analyse LLM Cours: {e}]"; # Message en français
-        final_results.append(qa_pair)
+            qa_pair.answer = f"[Erreur analyse LLM Cours: {e}]"
 
-    print(f"Analyse OCR complète. {len(final_results)} réponse générée.")
-    return final_results
+    return [qa_pair]
 
 def clean_llm_code_output(raw_code: str) -> str:
     """Nettoie la sortie de code du LLM en supprimant les marqueurs Markdown."""
@@ -424,64 +478,110 @@ def clean_llm_code_output(raw_code: str) -> str:
     cleaned = re.sub(r'\n?```$\n?', '', cleaned)
     return cleaned.strip() # Supprimer aussi les espaces/lignes vides autour
 
-async def call_groq_llm(prompt_content: str, is_json_output_expected: bool) -> str:
+async def call_gemini_llm(prompt_content: str, is_json_output_expected: bool) -> str:
     """
-    Helper pour appeler l'API Groq et gérer les erreurs communes.
-    Utilise le modèle meta-llama/llama-4-maverick-17b-128e-instruct.
+    Helper pour appeler l'API Gemini et gérer les erreurs communes.
+    Utilise le modèle gemini-2.5-flash-preview-04-17.
     """
-    try:
-        # Traduction des messages système
-        system_message = "Vous êtes un assistant utile."
-        if is_json_output_expected:
-            system_message = "Vous êtes un générateur JSON expert. Répondez UNIQUEMENT avec le JSON valide demandé. N'incluez aucun autre texte, explication ou formatage Markdown. Assurez-vous que toutes les chaînes, en particulier celles sur plusieurs lignes, sont correctement échappées selon les normes JSON."
+    if not gemini_model:
+        print("Erreur: Tentative d'appel LLM Gemini sans modèle initialisé.")
+        raise HTTPException(status_code=503, detail="Modèle Gemini non configuré.")
 
-        messages = [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": prompt_content}
-        ]
+    try:
+        # Le system_message est maintenant intégré dans prompt_content par la logique appelante
+        # ou géré par les instructions spécifiques dans prompt_content.
         
-        print(f"Appel LLM Groq (Modèle: meta-llama/llama-4-maverick-17b-128e-instruct, JSON attendu: {is_json_output_expected})...") 
-        completion = groq_client.chat.completions.create(
-            model="meta-llama/llama-4-maverick-17b-128e-instruct", 
-            messages=messages,
-            temperature=0, # Basse température pour plus de déterminisme
-            max_tokens=4096, # Augmenté pour les réponses potentiellement plus longues
-            top_p=1,
-            stream=False,
-        )
-        response_text = completion.choices[0].message.content
-        print("Réponse LLM reçue.") 
+        generation_config = None
+        effective_prompt = prompt_content
+
+        # Gemini utilise response_mime_type pour le mode JSON.
+        # Le rôle "system" est géré soit par system_instruction au niveau du modèle,
+        # soit en l'intégrant au début du prompt utilisateur.
+        # Ici, les prompts existants sont déjà assez directifs.
         
+        # Construction du message système à préfixer si besoin (pour plus de clarté)
+        # Cela reprend l'idée du system_message de l'ancienne fonction Groq
+        system_prefix = ""
         if is_json_output_expected:
-            print("Tentative d'extraction JSON...") 
-            match = re.search(r'(?s)(^.*?(\[.*?\]|\{.*?\}))', response_text)
-            json_string = None
-            if match:
-                potential_json = match.group(2)
-                print(f"Bloc JSON potentiel trouvé (longueur: {len(potential_json)})...") 
-                if (potential_json.startswith('[') and potential_json.endswith(']')) or \
-                   (potential_json.startswith('{') and potential_json.endswith('}')):
-                   json_string = potential_json
-            if json_string:
-                try:
-                    json.loads(json_string)
-                    print("JSON extrait et validé.") 
-                    return json_string
-                except json.JSONDecodeError as json_val_e:
-                    print(f"JSON potentiel extrait mais invalide: {json_val_e}. Réponse brute: {json_string[:500]}...") 
-                    return response_text 
-            else:
-                 print("Aucun bloc JSON clair ([...] ou {...}) trouvé dans la réponse. Retourne la réponse brute.") 
-                 return response_text 
+            system_prefix = "Vous êtes un générateur JSON expert. Répondez UNIQUEMENT avec le JSON valide demandé. N'incluez aucun autre texte, explication ou formatage Markdown. Assurez-vous que toutes les chaînes, en particulier celles sur plusieurs lignes, sont correctement échappées selon les normes JSON.\\n\\n"
+            generation_config = genai.types.GenerationConfig(
+                response_mime_type="application/json"
+            )
         else:
+            system_prefix = "Vous êtes un assistant utile.\\n\\n"
+            # Pour la sortie texte, pas de config spéciale de mime_type par défaut
+
+        final_prompt_for_gemini = system_prefix + prompt_content
+        
+        print(f"Appel LLM Gemini (Modèle: gemini-2.5-flash-preview-04-17, JSON attendu: {is_json_output_expected})...")
+        
+        # Gemini SDK est synchrone, exécutez-le dans un thread pour ne pas bloquer l'event loop FastAPI
+        response = await asyncio.to_thread(
+            gemini_model.generate_content,
+            final_prompt_for_gemini,
+            generation_config=generation_config
+        )
+        
+        response_text = response.text # Gemini met directement le texte (ou JSON str) ici
+        print(f"Réponse LLM Gemini reçue (longueur: {len(response_text)}).")
+
+        if is_json_output_expected:
+            # La logique de réparation JSON existante peut toujours être utile,
+            # même si Gemini est censé retourner du JSON valide en mode JSON.
+            print(f"Tentative de validation/réparation JSON de la réponse Gemini: '{response_text[:100]}...'")
+            
+            # En mode JSON, Gemini devrait retourner une chaîne JSON directement.
+            # Si response.text n'est pas un JSON valide, la réparation est tentée.
+            try:
+                json.loads(response_text)
+                print(f"JSON Gemini validé directement: '{response_text[:200]}...'")
+                return response_text
+            except json.JSONDecodeError as e_initial_parse:
+                print(f"JSON Gemini (\'{response_text[:100]}...\') invalide: {e_initial_parse}. Tentative de réparation...")
+                repaired_json = response_text
+                
+                if repaired_json.endswith("..."): # Cas où le LLM tronque avec "..."
+                    repaired_json = repaired_json[:-3].rstrip()
+                    print(f"  Réparation (suppression \'...\'): \'{repaired_json[:100]}...\'")
+
+                # Remplacer les nouvelles lignes non échappées (plus simple que la version précédente)
+                # Attention à ne pas double-échapper si le LLM a parfois raison
+                # Cette logique est simplifiée : si \n est là et que ce n'est pas \\n, on le transforme.
+                # Peut nécessiter un ajustement plus fin si le LLM est incohérent.
+                if '\\n' in repaired_json and not re.search(r'(?<!\\)\\n', repaired_json.replace('\\\\','')): # Heuristique
+                     pass # Si \n est déjà là (correctement ou incorrectement), on ne touche plus pour l'instant
+                elif '\n' in repaired_json:
+                    repaired_json = repaired_json.replace('\n', '\\\\n')
+                    print(f"  Réparation (remplacement \\n -> \\\\\\\\n): \'{repaired_json[:100]}...\'")
+                
+                if '\\r' in repaired_json and not re.search(r'(?<!\\)\\r', repaired_json.replace('\\\\','')):
+                     pass
+                elif '\r' in repaired_json:
+                    repaired_json = repaired_json.replace('\r', '\\\\r')
+                    print(f"  Réparation (remplacement \\r -> \\\\\\\\r): \'{repaired_json[:100]}...\'")
+
+                try:
+                    json.loads(repaired_json)
+                    print(f"JSON Gemini réparé et validé: '{repaired_json[:200]}...'")
+                    return repaired_json
+                except json.JSONDecodeError as e_repair_failed:
+                    print(f"Échec de la réparation du JSON Gemini ('{repaired_json[:100]}...'): {e_repair_failed}.")
+                    print(f"Retourne la réponse texte originale de Gemini qui a échoué à parser: '{response_text[:200]}...'")
+                    # Retourner le texte original, car c'est ce que Gemini a donné.
+                    # La fonction appelante (analyze_ocr_content) tentera json.loads() et gérera l'erreur.
+                    return response_text 
+        else: # Si pas de JSON attendu, retourner le texte brut
             return response_text
 
-    except GroqAPIError as e:
-        print(f"Erreur API Groq: {e}")
-        raise e 
+    except google_exceptions.GoogleAPIError as e:
+        print(f"Erreur API Gemini: {e}")
+        # Vous pouvez mapper cela à une HTTPException si nécessaire, par exemple:
+        # raise HTTPException(status_code=500, detail=f"Erreur API Gemini: {e}")
+        raise e # Relancer pour une gestion plus haut niveau ou débogage
     except Exception as e:
-        print(f"Erreur inattendue appel LLM: {e}")
-        raise e
+        print(f"Erreur inattendue appel LLM Gemini: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Erreur inattendue lors de l'appel LLM Gemini: {e}")
 
 def format_js_code(code):
     """
@@ -569,6 +669,73 @@ def run_js_code(code):
                 os.unlink(temp_filepath)
             except Exception as clean_e:
                  print(f"Warn: Failed to clean temp file {temp_filepath}: {clean_e}")
+            
+    return result
+
+def run_php_code(code):
+    """
+    Exécute un extrait de code PHP avec l'interpréteur PHP.
+    Retourne un dict avec le code formaté, le statut et la sortie d'exécution.
+    """
+    # PHP n'a pas de formateur simple intégré comme pour JS dans ce contexte,
+    # donc on retourne le code tel quel ou après un nettoyage basique.
+    # Un formatage plus avancé nécessiterait un outil externe.
+    formatted_php_code = code.strip() # Simple strip
+
+    result = {
+        'formatted_code': formatted_php_code,
+        'output': '',
+        'status': 'not_executed'
+    }
+    temp_filepath = None
+    php_executable_path = os.getenv("PHP_EXECUTABLE_PATH", r"C:\\xampp\\php\\php.exe") # Read from .env or default
+
+    try:
+        # --- Check if PHP executable exists ---
+        if not os.path.exists(php_executable_path):
+            result['status'] = 'error_php_executable_not_found_at_path'
+            result['output'] = f"Erreur système: Exécutable PHP non trouvé à {php_executable_path}. Vérifiez le chemin."
+            print(f"PHP executable not found at: {php_executable_path}")
+            return result
+        # --- End Check ---
+
+        with tempfile.NamedTemporaryFile(suffix='.php', delete=False, mode='w', encoding='utf-8') as temp_file:
+            temp_filepath = temp_file.name
+            temp_file.write(code)
+        
+        run_process = subprocess.run(
+            [php_executable_path, temp_filepath], # Use the full path
+            capture_output=True,
+            text=True,
+            timeout=5,
+            encoding='utf-8',
+            errors='replace'
+        )
+        
+        result['output'] = run_process.stdout
+        if run_process.stderr:
+            result['output'] += f"\nStderr: {run_process.stderr}" # Include Stderr in output
+            result['status'] = 'execution_error' 
+        
+        if result['status'] != 'execution_error':
+             result['status'] = 'executed'
+        
+    except subprocess.TimeoutExpired:
+        result['status'] = 'timeout'
+        result['output'] = "Timeout PHP (possible boucle infinie ou attente d'entrée)"
+    except FileNotFoundError:
+        result['status'] = 'error_php_not_found'
+        result['output'] = "Erreur système: Commande 'php' non trouvée. PHP est-il installé et dans le PATH?"
+    except Exception as run_error:
+        result['status'] = 'runtime_error'
+        result['output'] = f"Erreur d'exécution PHP: {str(run_error)}"
+    
+    finally:
+        if temp_filepath and os.path.exists(temp_filepath):
+            try:
+                os.unlink(temp_filepath)
+            except Exception as clean_e:
+                 print(f"Warn: Failed to clean temp PHP file {temp_filepath}: {clean_e}")
             
     return result
 

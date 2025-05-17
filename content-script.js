@@ -165,26 +165,38 @@ function createSelectionOverlay() {
   // Create capture button
   const captureBtn = document.createElement('button');
   captureBtn.textContent = 'Capture Selection';
-  captureBtn.style.padding = '8px 16px';
-  captureBtn.style.border = 'none';
-  captureBtn.style.borderRadius = '4px';
-  captureBtn.style.backgroundColor = '#4285f4';
-  captureBtn.style.color = 'white';
-  captureBtn.style.fontWeight = '500';
+  captureBtn.style.padding = '2px 8px'; // Further reduced padding
+  captureBtn.style.border = '1px solid #ccc'; // Subtle border
+  captureBtn.style.borderRadius = '3px'; // Slightly smaller radius
+  captureBtn.style.backgroundColor = '#f8f8f8'; // Light grey background
+  captureBtn.style.color = '#333'; // Darker text
+  captureBtn.style.fontWeight = '400'; // Normal weight
   captureBtn.style.cursor = 'pointer';
-  captureBtn.style.fontSize = '14px';
+  captureBtn.style.fontSize = '11px'; // Further reduced font size
+  captureBtn.style.minWidth = '90px'; // Defined minimum width
+  captureBtn.style.textAlign = 'center'; // Center text in button
+  captureBtn.style.lineHeight = '1.2'; // Explicit line height
+  captureBtn.style.boxSizing = 'border-box'; // Explicit box sizing
+  captureBtn.onmouseover = () => { captureBtn.style.backgroundColor = '#e9e9e9'; }; // Subtle hover
+  captureBtn.onmouseout = () => { captureBtn.style.backgroundColor = '#f8f8f8'; };
   
   // Create cancel button
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.style.padding = '8px 16px';
-  cancelBtn.style.border = 'none';
-  cancelBtn.style.borderRadius = '4px';
-  cancelBtn.style.backgroundColor = '#f44336';
-  cancelBtn.style.color = 'white';
-  cancelBtn.style.fontWeight = '500';
+  cancelBtn.style.padding = '2px 8px'; // Further reduced padding
+  cancelBtn.style.border = '1px solid #ddd'; // Subtle border
+  cancelBtn.style.borderRadius = '3px'; // Slightly smaller radius
+  cancelBtn.style.backgroundColor = '#fff'; // White background
+  cancelBtn.style.color = '#555'; // Medium grey text
+  cancelBtn.style.fontWeight = '400'; // Normal weight
   cancelBtn.style.cursor = 'pointer';
-  cancelBtn.style.fontSize = '14px';
+  cancelBtn.style.fontSize = '11px'; // Further reduced font size
+  cancelBtn.style.minWidth = '90px'; // Defined minimum width
+  cancelBtn.style.textAlign = 'center'; // Center text in button
+  cancelBtn.style.lineHeight = '1.2'; // Explicit line height
+  cancelBtn.style.boxSizing = 'border-box'; // Explicit box sizing
+  cancelBtn.onmouseover = () => { cancelBtn.style.backgroundColor = '#f0f0f0'; }; // Subtle hover
+  cancelBtn.onmouseout = () => { cancelBtn.style.backgroundColor = '#fff'; };
   
   // Add buttons to container
   buttonContainer.appendChild(captureBtn);
@@ -237,9 +249,11 @@ function createSelectionOverlay() {
     if (width > 10 && height > 10) {
         // Position and show buttons near the selection box
         const rect = selectionBox.getBoundingClientRect();
-        buttonContainer.style.top = `${rect.bottom + 5}px`; // Position below the box
-        buttonContainer.style.left = `${rect.left}px`; // Align with left edge
-        buttonContainer.style.transform = 'translateX(0)'; // Reset transform
+        buttonContainer.style.top = `${rect.bottom + 8}px`; // Position below the box (adjusted spacing)
+        buttonContainer.style.left = `${rect.left + rect.width / 2}px`; // Center horizontally relative to selection
+        buttonContainer.style.transform = 'translateX(-50%)'; // Adjust for centering
+        buttonContainer.style.bottom = 'auto'; // Reset bottom to allow natural height
+        buttonContainer.style.height = 'auto'; // Ensure height is determined by content
         buttonContainer.style.display = 'flex'; 
         selectionBox.style.pointerEvents = 'auto'; // Allow interaction if needed later?
     } else {
@@ -276,7 +290,7 @@ function createSelectionOverlay() {
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
   });
-
+  
   // --- Button Click Handlers --- 
   captureBtn.addEventListener('click', () => {
     console.log("Capture button clicked");

@@ -1,13 +1,13 @@
 #root {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0.25rem;
   text-align: center;
 }
 
 .logo {
-  height: 6em;
-  padding: 1.5em;
+  height: 3em;
+  padding: 0.5em;
   will-change: filter;
   transition: filter 300ms;
 }
@@ -34,7 +34,7 @@
 }
 
 .card {
-  padding: 2em;
+  padding: 0.5em;
 }
 
 .read-the-docs {
@@ -44,83 +44,106 @@
 /* src/App.css - Styles spécifiques à l'application */
 
 .app-container {
-  padding: 20px;
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  gap: 15px;
-  min-height: 100px; /* Pour éviter un popup trop petit au début */
+  gap: 4px;
 }
 
 .app-container h1 {
-  margin: 0 0 10px 0;
-  font-size: 1.5em; /* Taille adaptée pour popup */
+  margin: 0 0 3px 0;
+  font-size: 1.15em;
   text-align: center;
   color: #4285f4; /* Couleur thème */
 }
 
+.input-group {
+  display: flex;
+  flex-direction: column; /* Stack label and input */
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.input-group label {
+  font-size: 0.75em;
+  margin-bottom: 1px;
+  text-align: left;
+}
+
+.input-group input[type="number"] {
+  padding: 4px 6px; /* Reduced padding */
+  font-size: 0.9em; /* Slightly smaller font */
+  border: 1px solid #ccc;
+  border-radius: 3px;
+}
+
 .analysis-button {
-  padding: 12px 20px;
-  background-color: #4285f4;
-  color: white;
-  border: none;
-  border-radius: 5px;
+  padding: 6px 10px; /* Adjusted padding */
+  background-color: #ffffff; /* White background */
+  color: #333333; /* Dark text */
+  border: 1px solid #dddddd; /* Subtle border */
+  border-radius: 4px; /* Slightly smaller radius */
   cursor: pointer;
-  font-size: 1em;
-  font-weight: 500;
-  transition: background-color 0.3s ease;
+  font-size: 0.85em; /* Adjusted font size */
+  font-weight: 400; /* Normal weight */
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .analysis-button:hover:not(:disabled) {
-  background-color: #3367d6;
+  background-color: #f0f0f0; /* Light grey hover */
+  border-color: #cccccc;
 }
 
 .analysis-button:disabled {
-  background-color: #9e9e9e;
+  background-color: #f8f8f8; /* Very light grey disabled */
+  color: #aaaaaa; /* Lighter text for disabled */
+  border-color: #eeeeee;
   cursor: not-allowed;
 }
 
 .loading-indicator {
   text-align: center;
   color: #666;
-  padding: 10px 0;
+  padding: 3px 0;
 }
 
 .error-message {
-  padding: 10px;
-  border-radius: 4px;
-  margin-top: 10px;
-  font-size: 0.9em;
+  padding: 4px 8px;
+  border-radius: 3px;
+  margin-top: 3px;
+  font-size: 0.75em;
+  background-color: #f9f9f9; /* Light grey background for all messages */
+  border-left-width: 3px;
+  border-left-style: solid;
 }
 
 .error-message.error {
-  background-color: #ffebee; /* Rouge clair */
-  color: #c62828; /* Rouge foncé */
-  border: 1px solid #e57373;
+  border-left-color: #d9534f; /* Bootstrap danger red for left border */
+  color: #d9534f; /* Matching text color */
 }
 
 .error-message.status {
-  background-color: #e3f2fd; /* Bleu clair */
-  color: #1565c0; /* Bleu foncé */
-  border: 1px solid #64b5f6;
+  border-left-color: #5bc0de; /* Bootstrap info blue for left border */
+  color: #5bc0de; /* Matching text color */
 }
 
 /* Styles pour ResultsDisplay */
 .results-container {
-  margin-top: 15px;
+  margin-top: 4px;
   border-top: 1px solid #eee;
-  padding-top: 15px;
+  padding-top: 4px;
 }
 
 .results-container h2 {
-  margin: 0 0 10px 0;
-  font-size: 1.1em;
+  margin: 0 0 3px 0;
+  font-size: 0.95em;
 }
 
 .result-item {
   border: 1px solid #ddd;
   border-radius: 4px;
-  padding: 10px;
-  margin-bottom: 10px;
+  padding: 4px;
+  margin-bottom: 3px;
   background-color: #fff;
 }
 
@@ -132,8 +155,8 @@
 }
 
 .result-item h4 {
-  margin: 0 0 5px 0;
-  font-size: 1em;
+  margin: 0 0 2px 0;
+  font-size: 0.85em;
   color: #4285f4;
 }
 
@@ -141,12 +164,12 @@
   white-space: pre-wrap; /* Retour à la ligne auto */
   word-wrap: break-word;
   background-color: #f9f9f9;
-  padding: 8px;
+  padding: 3px;
   border-radius: 3px;
   font-size: 0.9em;
-  max-height: 150px; /* Limiter la hauteur */
-  overflow-y: auto; /* Ajouter une scrollbar si nécessaire */
-  margin-bottom: 10px;
+  max-height: 80px;
+  overflow-y: auto;
+  margin-bottom: 2px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -157,24 +180,26 @@
 }
 
 .copy-all-button, .copy-single-button {
-  background: #e0e0e0;
-  color: #333;
-  border: none;
-  padding: 5px 10px;
+  background-color: #ffffff; /* White background */
+  color: #333333; /* Dark text */
+  border: 1px solid #dddddd; /* Subtle border */
+  padding: 2px 5px;
   border-radius: 3px;
-  font-size: 0.8em;
+  font-size: 0.7em; /* Reduced font size */
   cursor: pointer;
-  margin-top: 5px;
-  transition: background-color 0.2s;
+  margin-top: 2px; /* Reduced margin */
+  margin-bottom: 2px; /* Added small bottom margin */
+  transition: background-color 0.2s ease, border-color 0.2s ease;
 }
 
 .copy-all-button:hover, .copy-single-button:hover {
-   background: #bdbdbd;
+   background-color: #f0f0f0; /* Light grey hover */
+   border-color: #cccccc;
 }
 
 .copy-all-button {
     display: block;
-    margin-bottom: 10px;
+    margin-bottom: 2px;
 }
 
 .copy-single-button {

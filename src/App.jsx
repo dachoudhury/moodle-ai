@@ -134,16 +134,16 @@ function App() {
 
   return (
     <div className="app-container">
-      <h1>MoodleAI</h1>
+      {/* <h1>MoodleAI</h1> Removed title */}
       
       <div className="input-group">
-        <label htmlFor="expected-lines">Lignes d'output attendues (Code) :</label>
+        {/* <label htmlFor="expected-lines">Lignes d'output attendues (Code) :</label> Removed label */}
         <input 
           type="number" 
           id="expected-lines" 
           value={expectedLines}
           onChange={(e) => setExpectedLines(e.target.value)} 
-          placeholder="Optionnel" 
+          placeholder="Lignes d'output attendues (Code)"
           min="0"
           disabled={isLoading}
         />

@@ -1,11 +1,11 @@
 # MoodleAI Helper Chrome Extension
 
-This Chrome extension provides AI-powered assistance for Moodle activities by analyzing selected screenshots. It uses Mistral AI for OCR and Groq for LLM analysis (specifically code execution and course content summarization).
+This Chrome extension provides AI-powered assistance for Moodle activities by analyzing selected screenshots. It uses Mistral AI for OCR and Gemini for LLM analysis (specifically code execution and course content summarization, with a primary focus on helping with practice quizzes).
 
 ## Components
 
 *   **Frontend (Popup):** Provides the user interface within the browser extension popup.
-*   **Backend:** A Python FastAPI server that handles image processing (OCR via Mistral) and AI analysis (via Groq). Found in the `backend` directory.
+*   **Backend:** A Python FastAPI server that handles image processing (OCR via Mistral) and AI analysis (via Gemini). Found in the `backend` directory.
 *   **Content Script:** Injected into web pages to enable screen area selection (`content-script.js`).
 *   **Background Script:** Manages communication between the popup, content script, and backend (`background.js`).
 
@@ -36,9 +36,9 @@ The backend server is required for the extension to function.
     *   Add your API keys to this file:
         ```dotenv
         MISTRAL_API_KEY="your_mistral_api_key_here"
-        GROQ_API_KEY="your_groq_api_key_here"
+        GEMINI_API_KEY="your_gemini_api_key_here"
         ```
-    *   *Note: The backend requires both Mistral (for OCR) and Groq (for LLM analysis) keys to be configured.*
+    *   *Note: The backend requires both Mistral (for OCR) and Gemini (for LLM analysis) keys to be configured.*
 5.  **Run the backend server:**
     ```bash
     python main.py

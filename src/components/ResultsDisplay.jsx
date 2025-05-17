@@ -21,17 +21,12 @@ function ResultsDisplay({ results }) {
 
   return (
     <div className="results-container">
-      <h2>Analysis Results:</h2>
-      <button onClick={handleCopyAll} className="copy-all-button">Copy All Results</button>
       {results.map((item, index) => (
         <div key={index} className="result-item">
           <h4>Question {index + 1}</h4>
           <pre className="question-text">{item.question}</pre>
           <h4>Answer {index + 1}</h4>
           <pre className="answer-text">{item.answer}</pre>
-          <button onClick={() => handleCopy(item.answer)} className="copy-single-button">
-              Copy Answer {index + 1}
-          </button>
         </div>
       ))}
     </div>
