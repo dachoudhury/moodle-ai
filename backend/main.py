@@ -507,11 +507,14 @@ async def call_gemini_llm(prompt_content: str, is_json_output_expected: bool) ->
             if is_json_output_expected:
                 system_prefix = "Vous êtes un générateur JSON expert. Répondez UNIQUEMENT avec le JSON valide demandé. N'incluez aucun autre texte, explication ou formatage Markdown. Assurez-vous que toutes les chaînes, en particulier celles sur plusieurs lignes, sont correctement échappées selon les normes JSON.\\\\n\\\\n"
                 generation_config = genai.types.GenerationConfig(
-                    response_mime_type="application/json"
+                    response_mime_type="application/json",
+                    temperature=0.0
                 )
             else:
                 system_prefix = "Vous êtes un assistant utile.\\\\n\\\\n"
-                # Pour la sortie texte, pas de config spéciale de mime_type par défaut
+                generation_config = genai.types.GenerationConfig(
+                    temperature=0.0
+                )
 
             final_prompt_for_gemini = system_prefix + prompt_content
             
