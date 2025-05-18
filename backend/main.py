@@ -487,101 +487,115 @@ async def call_gemini_llm(prompt_content: str, is_json_output_expected: bool) ->
         print("Erreur: Tentative d'appel LLM Gemini sans modèle initialisé.")
         raise HTTPException(status_code=503, detail="Modèle Gemini non configuré.")
 
-    try:
-        # Le system_message est maintenant intégré dans prompt_content par la logique appelante
-        # ou géré par les instructions spécifiques dans prompt_content.
-        
-        generation_config = None
-        effective_prompt = prompt_content
+    max_retries = 3
+    base_delay = 1  # seconds
 
-        # Gemini utilise response_mime_type pour le mode JSON.
-        # Le rôle "system" est géré soit par system_instruction au niveau du modèle,
-        # soit en l'intégrant au début du prompt utilisateur.
-        # Ici, les prompts existants sont déjà assez directifs.
-        
-        # Construction du message système à préfixer si besoin (pour plus de clarté)
-        # Cela reprend l'idée du system_message de l'ancienne fonction Groq
-        system_prefix = ""
-        if is_json_output_expected:
-            system_prefix = "Vous êtes un générateur JSON expert. Répondez UNIQUEMENT avec le JSON valide demandé. N'incluez aucun autre texte, explication ou formatage Markdown. Assurez-vous que toutes les chaînes, en particulier celles sur plusieurs lignes, sont correctement échappées selon les normes JSON.\\n\\n"
-            generation_config = genai.types.GenerationConfig(
-                response_mime_type="application/json"
-            )
-        else:
-            system_prefix = "Vous êtes un assistant utile.\\n\\n"
-            # Pour la sortie texte, pas de config spéciale de mime_type par défaut
-
-        final_prompt_for_gemini = system_prefix + prompt_content
-        
-        print(f"Appel LLM Gemini (Modèle: gemini-2.5-flash-preview-04-17, JSON attendu: {is_json_output_expected})...")
-        
-        # Gemini SDK est synchrone, exécutez-le dans un thread pour ne pas bloquer l'event loop FastAPI
-        response = await asyncio.to_thread(
-            gemini_model.generate_content,
-            final_prompt_for_gemini,
-            generation_config=generation_config
-        )
-        
-        response_text = response.text # Gemini met directement le texte (ou JSON str) ici
-        print(f"Réponse LLM Gemini reçue (longueur: {len(response_text)}).")
-
-        if is_json_output_expected:
-            # La logique de réparation JSON existante peut toujours être utile,
-            # même si Gemini est censé retourner du JSON valide en mode JSON.
-            print(f"Tentative de validation/réparation JSON de la réponse Gemini: '{response_text[:100]}...'")
+    for attempt in range(max_retries):
+        try:
+            # Le system_message est maintenant intégré dans prompt_content par la logique appelante
+            # ou géré par les instructions spécifiques dans prompt_content.
             
-            # En mode JSON, Gemini devrait retourner une chaîne JSON directement.
-            # Si response.text n'est pas un JSON valide, la réparation est tentée.
-            try:
-                json.loads(response_text)
-                print(f"JSON Gemini validé directement: '{response_text[:200]}...'")
-                return response_text
-            except json.JSONDecodeError as e_initial_parse:
-                print(f"JSON Gemini (\'{response_text[:100]}...\') invalide: {e_initial_parse}. Tentative de réparation...")
-                repaired_json = response_text
-                
-                if repaired_json.endswith("..."): # Cas où le LLM tronque avec "..."
-                    repaired_json = repaired_json[:-3].rstrip()
-                    print(f"  Réparation (suppression \'...\'): \'{repaired_json[:100]}...\'")
+            generation_config = None
+            # effective_prompt = prompt_content # Removed, as final_prompt_for_gemini is constructed below
 
-                # Remplacer les nouvelles lignes non échappées (plus simple que la version précédente)
-                # Attention à ne pas double-échapper si le LLM a parfois raison
-                # Cette logique est simplifiée : si \n est là et que ce n'est pas \\n, on le transforme.
-                # Peut nécessiter un ajustement plus fin si le LLM est incohérent.
-                if '\\n' in repaired_json and not re.search(r'(?<!\\)\\n', repaired_json.replace('\\\\','')): # Heuristique
-                     pass # Si \n est déjà là (correctement ou incorrectement), on ne touche plus pour l'instant
-                elif '\n' in repaired_json:
-                    repaired_json = repaired_json.replace('\n', '\\\\n')
-                    print(f"  Réparation (remplacement \\n -> \\\\\\\\n): \'{repaired_json[:100]}...\'")
-                
-                if '\\r' in repaired_json and not re.search(r'(?<!\\)\\r', repaired_json.replace('\\\\','')):
-                     pass
-                elif '\r' in repaired_json:
-                    repaired_json = repaired_json.replace('\r', '\\\\r')
-                    print(f"  Réparation (remplacement \\r -> \\\\\\\\r): \'{repaired_json[:100]}...\'")
+            # Gemini utilise response_mime_type pour le mode JSON.
+            # Le rôle "system" est géré soit par system_instruction au niveau du modèle,
+            # soit en l'intégrant au début du prompt utilisateur.
+            # Ici, les prompts existants sont déjà assez directifs.
+            
+            system_prefix = ""
+            if is_json_output_expected:
+                system_prefix = "Vous êtes un générateur JSON expert. Répondez UNIQUEMENT avec le JSON valide demandé. N'incluez aucun autre texte, explication ou formatage Markdown. Assurez-vous que toutes les chaînes, en particulier celles sur plusieurs lignes, sont correctement échappées selon les normes JSON.\\\\n\\\\n"
+                generation_config = genai.types.GenerationConfig(
+                    response_mime_type="application/json"
+                )
+            else:
+                system_prefix = "Vous êtes un assistant utile.\\\\n\\\\n"
+                # Pour la sortie texte, pas de config spéciale de mime_type par défaut
 
+            final_prompt_for_gemini = system_prefix + prompt_content
+            
+            print(f"Appel LLM Gemini (Modèle: gemini-2.5-flash-preview-04-17, JSON attendu: {is_json_output_expected}, Tentative: {attempt + 1}/{max_retries})...")
+            
+            response = await asyncio.to_thread(
+                gemini_model.generate_content,
+                final_prompt_for_gemini,
+                generation_config=generation_config
+            )
+            
+            response_text = response.text
+            print(f"Réponse LLM Gemini reçue (longueur: {len(response_text)}).")
+
+            if is_json_output_expected:
+                print(f"Tentative de validation/réparation JSON de la réponse Gemini: '{response_text[:100]}...'")
                 try:
-                    json.loads(repaired_json)
-                    print(f"JSON Gemini réparé et validé: '{repaired_json[:200]}...'")
-                    return repaired_json
-                except json.JSONDecodeError as e_repair_failed:
-                    print(f"Échec de la réparation du JSON Gemini ('{repaired_json[:100]}...'): {e_repair_failed}.")
-                    print(f"Retourne la réponse texte originale de Gemini qui a échoué à parser: '{response_text[:200]}...'")
-                    # Retourner le texte original, car c'est ce que Gemini a donné.
-                    # La fonction appelante (analyze_ocr_content) tentera json.loads() et gérera l'erreur.
-                    return response_text 
-        else: # Si pas de JSON attendu, retourner le texte brut
-            return response_text
+                    json.loads(response_text)
+                    print(f"JSON Gemini validé directement: '{response_text[:200]}...'")
+                    return response_text
+                except json.JSONDecodeError as e_initial_parse:
+                    print(f"JSON Gemini ('{response_text[:100]}...') invalide: {e_initial_parse}. Tentative de réparation...")
+                    repaired_json = response_text
+                    
+                    if repaired_json.endswith("..."):
+                        repaired_json = repaired_json[:-3].rstrip()
+                        print(f"  Réparation (suppression \'...\'): \'{repaired_json[:100]}...\'")
 
-    except google_exceptions.GoogleAPIError as e:
-        print(f"Erreur API Gemini: {e}")
-        # Vous pouvez mapper cela à une HTTPException si nécessaire, par exemple:
-        # raise HTTPException(status_code=500, detail=f"Erreur API Gemini: {e}")
-        raise e # Relancer pour une gestion plus haut niveau ou débogage
-    except Exception as e:
-        print(f"Erreur inattendue appel LLM Gemini: {e}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Erreur inattendue lors de l'appel LLM Gemini: {e}")
+                    if '\\\\n' in repaired_json and not re.search(r'(?<!\\\\)\\\\n', repaired_json.replace('\\\\\\\\','')):
+                         pass 
+                    elif '\\n' in repaired_json:
+                        repaired_json = repaired_json.replace('\\n', '\\\\\\\\n')
+                        print(f"  Réparation (remplacement \\\\n -> \\\\\\\\\\\\n): \'{repaired_json[:100]}...\'")
+                    
+                    if '\\\\r' in repaired_json and not re.search(r'(?<!\\\\)\\\\r', repaired_json.replace('\\\\\\\\','')):
+                         pass
+                    elif '\\r' in repaired_json:
+                        repaired_json = repaired_json.replace('\\r', '\\\\\\\\r')
+                        print(f"  Réparation (remplacement \\\\r -> \\\\\\\\\\\\r): \'{repaired_json[:100]}...\'")
+
+                    try:
+                        json.loads(repaired_json)
+                        print(f"JSON Gemini réparé et validé: '{repaired_json[:200]}...'")
+                        return repaired_json
+                    except json.JSONDecodeError as e_repair_failed:
+                        print(f"Échec de la réparation du JSON Gemini ('{repaired_json[:100]}...'): {e_repair_failed}.")
+                        print(f"Retourne la réponse texte originale de Gemini qui a échoué à parser: '{response_text[:200]}...'")
+                        return response_text 
+            else: 
+                return response_text
+
+        except google_exceptions.GoogleAPIError as e:
+            error_code = getattr(e, 'code', None) # Try to get the status code
+            print(f"Erreur API Gemini (Tentative {attempt + 1}/{max_retries}): {e}, Code: {error_code}")
+            
+            # Retry only for specific server-side errors (500, 503, 504)
+            # Add other retryable codes if needed.
+            # Note: Gemini API errors might not always map directly to HTTP status codes in e.code.
+            # The error message "500 An internal error has occurred" suggests checking the message too.
+            is_retryable_error = False
+            if error_code in [500, 503, 504]:
+                is_retryable_error = True
+            elif "internal error" in str(e).lower() or "service unavailable" in str(e).lower(): # Check message
+                is_retryable_error = True
+
+            if is_retryable_error and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"Tentative de nouvelle tentative dans {delay}s...")
+                await asyncio.sleep(delay)
+            else:
+                # If it's not a retryable error or max retries reached, re-raise
+                # Vous pouvez mapper cela à une HTTPException si nécessaire, par exemple:
+                # raise HTTPException(status_code=500, detail=f"Erreur API Gemini: {e}")
+                raise e # Relancer pour une gestion plus haut niveau ou débogage
+        except Exception as e:
+            print(f"Erreur inattendue appel LLM Gemini (Tentative {attempt + 1}/{max_retries}): {e}")
+            traceback.print_exc()
+            # Do not retry for other unexpected errors unless specifically identified as transient
+            raise HTTPException(status_code=500, detail=f"Erreur inattendue lors de l'appel LLM Gemini: {e}")
+    
+    # Should not be reached if max_retries > 0, as the loop either returns or raises.
+    # Adding a fallback raise for safety, though.
+    raise HTTPException(status_code=500, detail="Échec de l'appel LLM Gemini après plusieurs tentatives.")
+
 
 def format_js_code(code):
     """
