@@ -1,5 +1,7 @@
 # MoodleAI Helper Chrome Extension
 
+Objective: save time when you're doing practice MCQ :)
+
 This Chrome extension provides AI-powered assistance for Moodle activities by analyzing selected screenshots. It uses Mistral AI for OCR and Gemini for LLM analysis (specifically code execution and course content summarization, with a primary focus on helping with practice quizzes).
 
 ## Components
